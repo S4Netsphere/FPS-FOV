@@ -84,6 +84,7 @@ struct __attribute__ ((packed)) game_context{
 	uint8_t fps_limiter_toggle;
 };
 
+// static at 0x01642e28
 static struct game_context *(*fetch_game_context)(void) = (struct game_context *(*)(void)) 0x004ad790;
 static void (__attribute__((thiscall)) *update_time_delta)(struct time_context *ctx) = (void (__attribute__((thiscall)) *)(struct time_context *ctx)) 0x00ff7f30;
 
@@ -210,14 +211,50 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	// various fixes
 
 	float y = param_2;
+
+	// 0x00b81247 -> in air + holding shift, provides shift + directional movement, but only after the ability was activated
+	// 0x00b8110d -> in air + directional movement, also provides directional movement during flight activation
+
+	// flight takes half a second to get into activated state
+	// shooting/reloading state overrides flying state, so it is not a good indicator
+
+	// 0x006256f8 -> in air, free fall/jump, provides directional movement
+	// 0x00625cd9 -> in air, free fall/jump, provides directional movement
+	// 0x006295a4 -> in air, free fall/jump while shooting, provides directional movement
+
+	static bool flying = false;
+
+	if(ret_addr == (void *)0x006256f8 || ret_addr == (void *)0x006256f8 || ret_addr == (void* )0x006295a4){
+		flying = false;
+	}
+
+	// on ground
+	if(ret_addr == (void *)0x00526f0e){
+		flying = false;
+	}
+
 	// in air
 	if(ret_addr == (void*)0x00527467){
+		// wall jump
+		if(actx->actor_state == 9){
+			flying = false;
+		}
+
 		// fly
-		if(actx->actor_state == 31 && param_2 > 0.0001){
-			// simulated, should not be a lua value
-			y = 19.5 * frametime / orig_fixed_frametime;
-			LOG_VERBOSE("%s: applying fly speed fix, y %f, y/param_2 %f", __FUNCTION__, y, y / param_2);
-			// y/param_2 is roughly orig frametime/frametime, without accounting for the unnoticible at 60 gradual change
+		if(flying && param_2 > 0.0001){
+			// scaled, trying not to change the behavior too hard
+			// there is something funky with the gradual speed gain vs framerate however
+			float modifier = (orig_fixed_frametime / frametime);
+			float frametime_float = frametime * 1.0;
+			if(frametime_float < orig_fixed_frametime){
+				// whenever there's an increasing curve it gets weird
+				// it's basically area of a smoother curve vs a less smooth curve
+				float frametime_diff_ratio = (orig_fixed_frametime - frametime_float) / orig_fixed_frametime;
+				modifier = modifier * (1.0 - 0.4 * frametime_diff_ratio);
+			}
+
+			y = param_2 * modifier;
+			LOG_VERBOSE("%s: applying fly speed fix, y %f, y/param_2 %f", __FUNCTION__, y, modifier);
 		}
 
 		// scythe uppercut
@@ -251,17 +288,15 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 		}else{
 			first_ps_drop_frame = true;
 		}
+
+		if(param_2 > 0.0001){
+			flying = true;
+		}
 	}
 
-	// on ground
-	if(ret_addr == (void *)0x00526f0e){
-	}
-
-	if(ret_addr == (void *)0x00526f0e || ret_addr == (void*)0x00527467){
-		LOG_VERBOSE("%s: ctx 0x%08x, param_1 %f, param_2 %f, param_3 %f", __FUNCTION__, ctx, param_1, param_2, param_3);
-		LOG_VERBOSE("%s: called from 0x%08x -> 0x%08x -> 0x%08x", __FUNCTION__, __builtin_return_address(2), __builtin_return_address(1), __builtin_return_address(0));
-		LOG_VERBOSE("%s: actx->actor_state %u", __FUNCTION__, actx->actor_state);
-	}
+	LOG_VERBOSE("%s: ctx 0x%08x, param_1 %f, param_2 %f, param_3 %f", __FUNCTION__, ctx, param_1, param_2, param_3);
+	LOG_VERBOSE("%s: called from 0x%08x -> 0x%08x -> 0x%08x", __FUNCTION__, __builtin_return_address(2), __builtin_return_address(1), __builtin_return_address(0));
+	LOG_VERBOSE("%s: actx->actor_state %u, frametime %u", __FUNCTION__, actx->actor_state, frametime);
 
 	orig_move_actor_by(ctx, param_1, y, param_3);
 }
@@ -365,7 +400,7 @@ static void hook_move_actor_exact(){
 	memcpy((void *)0x007b0180, intended_patch, sizeof(intended_patch));
 }
 
-// function at 00871970, not essentially game tick
+// function at 0x00871970, not essentially game tick
 static void (__attribute__((thiscall)) *orig_game_tick)(void *);
 void __attribute__((thiscall)) patched_game_tick(void *tick_ctx){
 	LOG_VERBOSE("game tick function hook fired");
