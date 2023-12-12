@@ -255,6 +255,9 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 
 	// on ground
 	if(ret_addr == (void *)0x00526f0e){
+		// unscale the value
+		y = param_2 * (orig_fixed_frametime / frametime);
+		LOG_VERBOSE("%s: changing on ground gravity from %f to %f", __FUNCTION__, param_2, y);
 	}
 
 	if(ret_addr == (void *)0x00526f0e || ret_addr == (void*)0x00527467){
