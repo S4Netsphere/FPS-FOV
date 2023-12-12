@@ -266,6 +266,11 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 			flying = false;
 		}
 
+		// dodges
+		if(actx->actor_state == 11 || actx->actor_state == 12 || actx->actor_state == 22 || actx->actor_state == 23){
+			flying = false;
+		}
+
 		// fly
 		if(flying && param_2 > 0.0001){
 			// scaled, trying not to change the behavior too hard
