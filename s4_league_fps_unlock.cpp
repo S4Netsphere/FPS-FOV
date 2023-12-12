@@ -224,6 +224,7 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	// 0x006353a7 -> x/z movement on ground, and walking onto jump pad.....
 	// 0x006173e3 -> sprining, and sprinting onto jump pad...
 	// 0x00626298 -> landing
+	// 0x00615aa1 -> landing + direction
 
 	static bool flying = false;
 
@@ -235,7 +236,7 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 		flying = false;
 	}
 
-	if(ret_addr == (void *)0x00626298){
+	if(ret_addr == (void *)0x00626298 || ret_addr == (void *)0x00615aa1){
 		flying = false;
 	}
 
@@ -268,6 +269,11 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 
 		// dodges
 		if(actx->actor_state == 11 || actx->actor_state == 12 || actx->actor_state == 22 || actx->actor_state == 23){
+			flying = false;
+		}
+
+		// counter sword shielding
+		if(actx->actor_state == 40){
 			flying = false;
 		}
 
