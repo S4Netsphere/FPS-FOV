@@ -10,7 +10,7 @@
 // mingw don't provide a mprotect wrap
 #include <memoryapi.h>
 
-#define ENABLE_LOGGING 1
+#define ENABLE_LOGGING 0
 
 #if ENABLE_LOGGING
 FILE *log_file = NULL;
@@ -248,6 +248,16 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	if(ret_addr == (void*)0x00527467){
 		// wall jump
 		if(actx->actor_state == 9){
+			flying = false;
+		}
+
+		// metallic
+		if(actx->actor_state == 37){
+			flying = false;
+		}
+
+		// getting hit
+		if(actx->actor_state == 18 || actx->actor_state == 19){
 			flying = false;
 		}
 
