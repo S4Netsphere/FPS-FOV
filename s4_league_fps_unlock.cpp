@@ -10,7 +10,7 @@
 // mingw don't provide a mprotect wrap
 #include <memoryapi.h>
 
-#define ENABLE_LOGGING 0
+#define ENABLE_LOGGING 1
 
 #if ENABLE_LOGGING
 FILE *log_file = NULL;
@@ -221,10 +221,21 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	// 0x006256f8 -> in air, free fall/jump, provides directional movement
 	// 0x00625cd9 -> in air, free fall/jump, provides directional movement
 	// 0x006295a4 -> in air, free fall/jump while shooting, provides directional movement
+	// 0x006353a7 -> x/z movement on ground, and walking onto jump pad.....
+	// 0x006173e3 -> sprining, and sprinting onto jump pad...
+	// 0x00626298 -> landing
 
 	static bool flying = false;
 
-	if(ret_addr == (void *)0x006256f8 || ret_addr == (void *)0x006256f8 || ret_addr == (void* )0x006295a4){
+	if(ret_addr == (void *)0x006256f8 || ret_addr == (void *)0x00625cd9 || ret_addr == (void* )0x006295a4){
+		flying = false;
+	}
+
+	if(ret_addr == (void *)0x006353a7 || ret_addr == (void *)0x006173e3){
+		flying = false;
+	}
+
+	if(ret_addr == (void *)0x00626298){
 		flying = false;
 	}
 
@@ -237,6 +248,11 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	if(ret_addr == (void*)0x00527467){
 		// wall jump
 		if(actx->actor_state == 9){
+			flying = false;
+		}
+
+		// blow/hit fly away, wall hit
+		if(actx->actor_state == 16 || actx->actor_state == 17){
 			flying = false;
 		}
 
@@ -294,9 +310,9 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 		}
 	}
 
-	LOG_VERBOSE("%s: ctx 0x%08x, param_1 %f, param_2 %f, param_3 %f", __FUNCTION__, ctx, param_1, param_2, param_3);
-	LOG_VERBOSE("%s: called from 0x%08x -> 0x%08x -> 0x%08x", __FUNCTION__, __builtin_return_address(2), __builtin_return_address(1), __builtin_return_address(0));
-	LOG_VERBOSE("%s: actx->actor_state %u, frametime %u", __FUNCTION__, actx->actor_state, frametime);
+	LOG("%s: ctx 0x%08x, param_1 %f, param_2 %f, param_3 %f", __FUNCTION__, ctx, param_1, param_2, param_3);
+	LOG("%s: called from 0x%08x -> 0x%08x -> 0x%08x", __FUNCTION__, __builtin_return_address(2), __builtin_return_address(1), __builtin_return_address(0));
+	LOG("%s: actx->actor_state %u, frametime %u", __FUNCTION__, actx->actor_state, frametime);
 
 	orig_move_actor_by(ctx, param_1, y, param_3);
 }
