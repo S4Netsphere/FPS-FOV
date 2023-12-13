@@ -10,7 +10,7 @@
 // mingw don't provide a mprotect wrap
 #include <memoryapi.h>
 
-#define ENABLE_LOGGING 0
+#define ENABLE_LOGGING 1
 
 #if ENABLE_LOGGING
 FILE *log_file = NULL;
@@ -225,6 +225,14 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	// 0x006173e3 -> sprining, and sprinting onto jump pad...
 	// 0x00626298 -> landing
 	// 0x00615aa1 -> landing + direction
+	// 0x0062bca7 -> shotting and walking
+
+
+	static bool continous_flying = false;
+
+	if(ret_addr == (void *)0x00b81247 || ret_addr == (void *)0x00b8110d){
+		continous_flying = true;
+	}
 
 	static bool flying = false;
 
@@ -237,6 +245,10 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	}
 
 	if(ret_addr == (void *)0x00626298 || ret_addr == (void *)0x00615aa1){
+		flying = false;
+	}
+
+	if(ret_addr == (void *)0x0062bca7){
 		flying = false;
 	}
 
@@ -272,8 +284,37 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 			flying = false;
 		}
 
+		// shooting and reloading
+		if(actx->actor_state == 39 || actx->actor_state == 25){
+			if(continous_flying){
+				continous_flying = false;
+			}else{
+				flying = false;
+			}
+		}
+
 		// counter sword shielding
 		if(actx->actor_state == 40){
+			flying = false;
+		}
+
+		// jump attack
+		if(actx->actor_state == 45){
+			flying = false;
+		}
+
+		// down and state standup
+		if(actx->actor_state == 14 || actx->actor_state == 15){
+			flying = false;
+		}
+
+		// more attacks
+		if(actx->actor_state == 41 || actx->actor_state == 42 || actx->actor_state == 43 || actx->actor_state == 44){
+			flying = false;
+		}
+
+		// crouch
+		if(actx->actor_state == 7){
 			flying = false;
 		}
 
