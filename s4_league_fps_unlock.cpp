@@ -17,9 +17,17 @@
 // mingw don't provide a mprotect wrap
 #include <memoryapi.h>
 
-// threads
+// processes and threads
 #include <processthreadsapi.h>
 #include <tlhelp32.h>
+
+// module information
+#include <psapi.h>
+#include <libloaderapi.h>
+
+#define SUSPEND_BEFORE_HOOKING 1
+#define ENABLE_LOGGING 0
+#define SIMPLIFIED_SLEEP 0
 
 // http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FThread%2FNtDelayExecution.html
 extern "C"
@@ -55,8 +63,6 @@ NtSetTimerResolution(
     );
 
 static ULONG min_nt_delay_100ns;
-
-#define ENABLE_LOGGING 0
 
 #if ENABLE_LOGGING
 FILE *log_file = NULL;
@@ -110,8 +116,8 @@ pthread_mutex_lock(&_mem_fence); \
 pthread_mutex_unlock(&_mem_fence);
 
 #define PATCH_UINT32(l, v){ \
-	uint32_t _val = (uint32_t)v; \
-	patch_memory((uint8_t *)l, (uint8_t *)&_val, 4); \
+	uint32_t _val = (uint32_t)(v); \
+	patch_memory((uint8_t *)(l), (uint8_t *)&_val, 4); \
 }
 
 static pthread_mutex_t config_mutex;
@@ -323,7 +329,7 @@ void __attribute__((thiscall)) patched_calculate_weapon_spread(struct ctx_calcul
 	return;
 }
 
-static void hook_calculate_weapon_spread(){
+static void hook_calculate_weapon_spread(uint32_t address_offset){
 	LOG("hooking calculate_weapon_spread");
 
 	uint8_t intended_trampoline[] = {
@@ -334,7 +340,8 @@ static void hook_calculate_weapon_spread(){
 		// JMP eax
 		0xff, 0xe0
 	};
-	memcpy((void *)intended_trampoline, (void *)0x005970a0, 9);
+	*(uint32_t *)&intended_trampoline[10] = 0x005970a9 + address_offset;
+	memcpy((void *)intended_trampoline, (void *)(0x005970a0 + address_offset), 9);
 
 	uint8_t intended_patch[] = {
 		// MOV eax, patched_calculate_weapon_spread
@@ -351,7 +358,7 @@ static void hook_calculate_weapon_spread(){
 	DWORD old_protect;
 	VirtualProtect((void *)orig_calculate_weapon_spread, sizeof(intended_trampoline), PAGE_EXECUTE_READ, &old_protect);
 
-	patch_memory((uint8_t *)0x005970a0, intended_patch, sizeof(intended_patch));
+	patch_memory((uint8_t *)(0x005970a0 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
 // can change active fov by hooking this
@@ -376,7 +383,7 @@ void __attribute__((thiscall)) patched_fun_00780b20(struct ctx_fun_00780b20 *ctx
 	ctx->target_fov = orig_fov;
 }
 
-static void hook_fun_00780b20(){
+static void hook_fun_00780b20(uint32_t address_offset){
 	LOG("hooking fun_00780b20");
 
 	uint8_t intended_trampoline[] = {
@@ -387,7 +394,8 @@ static void hook_fun_00780b20(){
 		// JMP eax
 		0xff, 0xe0
 	};
-	memcpy((void *)intended_trampoline, (void *)0x00780b20, 10);
+	*(uint32_t *)&intended_trampoline[11] = 0x00780b2a + address_offset;
+	memcpy((void *)intended_trampoline, (void *)(0x00780b20 + address_offset), 10);
 
 	uint8_t intended_patch[] = {
 		// MOV eax, patched_fun_00780b20
@@ -404,7 +412,7 @@ static void hook_fun_00780b20(){
 	DWORD old_protect;
 	VirtualProtect((void *)orig_fun_00780b20, sizeof(intended_trampoline), PAGE_EXECUTE_READ, &old_protect);
 
-	patch_memory((uint8_t *)0x00780b20, intended_patch, sizeof(intended_patch));
+	patch_memory((uint8_t *)(0x00780b20 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
 // this is a looong function with a lot of branches, but it seems to use the SetDrop value during a jump attack
@@ -422,7 +430,7 @@ void __attribute__((thiscall)) patched_fun_005efcb0(struct ctx_fun_005efcb0 *ctx
 	LOG_VERBOSE("%s: ctx 0x%08x, param_1 %u, set_drop_val %f, 0x%08x -> 0x%08x -> 0x%08x", __FUNCTION__, ctx, param_1, ctx->set_drop_val, __builtin_return_address(2), __builtin_return_address(1), __builtin_return_address(0));
 }
 
-static void hook_fun_005efcb0(){
+static void hook_fun_005efcb0(uint32_t address_offset){
 	LOG("hooking fun_005efcb0");
 
 	uint8_t intended_trampoline[] = {
@@ -433,7 +441,8 @@ static void hook_fun_005efcb0(){
 		// JMP eax
 		0xff, 0xe0
 	};
-	memcpy((void *)intended_trampoline, (void *)0x005efcb0, 10);
+	*(uint32_t *)&intended_trampoline[11] = 0x005efcba + address_offset;
+	memcpy((void *)intended_trampoline, (void *)(0x005efcb0 + address_offset), 10);
 
 	uint8_t intended_patch[] = {
 		// MOV eax, patched_fun_005efcb0
@@ -450,7 +459,7 @@ static void hook_fun_005efcb0(){
 	DWORD old_protect;
 	VirtualProtect((void *)orig_fun_005efcb0, sizeof(intended_trampoline), PAGE_EXECUTE_READ, &old_protect);
 
-	patch_memory((uint8_t *)0x005efcb0, intended_patch, sizeof(intended_patch));
+	patch_memory((uint8_t *)(0x005efcb0 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
 // TODO find s10 offset, this function is also not used at the moment
@@ -610,7 +619,7 @@ void __attribute__((thiscall)) patched_move_actor_by(struct move_actor_by_ctx *c
 	orig_move_actor_by(ctx, param_1, y, param_3);
 }
 
-static void hook_move_actor_by(){
+static void hook_move_actor_by(uint32_t address_offset){
 	LOG("hooking move_actor_by");
 
 	uint8_t intended_trampoline[] = {
@@ -621,7 +630,8 @@ static void hook_move_actor_by(){
 		// JMP eax
 		0xff, 0xe0
 	};
-	memcpy((void *)intended_trampoline, (void *)0x00521030, 10);
+	*(uint32_t *)&intended_trampoline[11] = 0x0052103a + address_offset;
+	memcpy((void *)intended_trampoline, (void *)(0x00521030 + address_offset), 10);
 
 	uint8_t intended_patch[] = {
 		// MOV eax, patched_move_actor_by
@@ -638,7 +648,7 @@ static void hook_move_actor_by(){
 	DWORD old_protect;
 	VirtualProtect((void *)orig_move_actor_by, sizeof(intended_trampoline), PAGE_EXECUTE_READ, &old_protect);
 
-	patch_memory((uint8_t *)0x00521030, intended_patch, sizeof(intended_patch));
+	patch_memory((uint8_t *)(0x00521030 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
 // TODO find s10 offset, this function is also not used at the moment
@@ -712,7 +722,7 @@ static void hook_move_actor_exact(){
 
 // 9 direct usages of 0x015f4210
 float speed_dampeners[9];
-static void redirect_speed_dampeners(){
+static void redirect_speed_dampeners(uint32_t address_offset){
 	LOG("%s: redirecting speed dampeners to 0x%08x to 0x%08x", __FUNCTION__, &speed_dampeners[0], &speed_dampeners[8]);
 
 	for(int i = 0;i < sizeof(speed_dampeners) / sizeof(float); i++){
@@ -720,15 +730,15 @@ static void redirect_speed_dampeners(){
 		memcpy(&speed_dampeners[i], value, sizeof value);
 	}
 
-	PATCH_UINT32(0x0056b25e, &speed_dampeners[0]);
-	PATCH_UINT32(0x007d040d, &speed_dampeners[1]);
-	PATCH_UINT32(0x007d047a, &speed_dampeners[2]);
-	PATCH_UINT32(0x007d0fd4, &speed_dampeners[3]);
-	PATCH_UINT32(0x007d0fdc, &speed_dampeners[4]);
-	PATCH_UINT32(0x007d1743, &speed_dampeners[5]);
-	PATCH_UINT32(0x007d1779, &speed_dampeners[6]);
-	PATCH_UINT32(0x007d1cac, &speed_dampeners[7]);
-	PATCH_UINT32(0x007d2133, &speed_dampeners[8]);
+	PATCH_UINT32(0x0056b25e + address_offset, &speed_dampeners[0]);
+	PATCH_UINT32(0x007d040d + address_offset, &speed_dampeners[1]);
+	PATCH_UINT32(0x007d047a + address_offset, &speed_dampeners[2]);
+	PATCH_UINT32(0x007d0fd4 + address_offset, &speed_dampeners[3]);
+	PATCH_UINT32(0x007d0fdc + address_offset, &speed_dampeners[4]);
+	PATCH_UINT32(0x007d1743 + address_offset, &speed_dampeners[5]);
+	PATCH_UINT32(0x007d1779 + address_offset, &speed_dampeners[6]);
+	PATCH_UINT32(0x007d1cac + address_offset, &speed_dampeners[7]);
+	PATCH_UINT32(0x007d2133 + address_offset, &speed_dampeners[8]);
 }
 
 // function at 00871970, not essentially game tick
@@ -763,6 +773,9 @@ void __attribute__((thiscall)) patched_game_tick(void *tick_ctx){
 				if(config.framelimiter_full_busy_loop){
 					// spin it all
 				}else{
+					#if SIMPLIFIED_SLEEP
+					sleep(0);
+					#else
 					uint32_t diff_100ns = diff_ns / 100;
 					if(target_frametime_100ns > diff_100ns + config.framelimiter_busy_loop_buffer_100ns){
 						uint32_t sleep_100ns = target_frametime_100ns - (diff_100ns + config.framelimiter_busy_loop_buffer_100ns);
@@ -780,6 +793,7 @@ void __attribute__((thiscall)) patched_game_tick(void *tick_ctx){
 							NtDelayExecution(false, &sleep_li);
 						}
 					}
+					#endif
 					// spin the rest
 				}
 				clock_gettime(CLOCK_MONOTONIC, &this_tick);
@@ -818,7 +832,7 @@ void __attribute__((thiscall)) patched_game_tick(void *tick_ctx){
 
 	LOG_VERBOSE("delta_t: %f, speed_dampener: %f", tctx.delta_t, *speed_dampener);
 }
-static void hook_game_tick(){
+static void hook_game_tick(uint32_t address_offset){
 	LOG("hooking game tick");
 	uint8_t intended_trampoline[] = {
 		// original 9 bytes
@@ -828,7 +842,8 @@ static void hook_game_tick(){
 		// JMP EAX
 		0xff, 0xe0
 	};
-	memcpy(intended_trampoline, (void *)0x0089f400, 9);
+	*(uint32_t *)&intended_trampoline[10] = 0x0089f409 + address_offset;
+	memcpy(intended_trampoline, (void *)(0x0089f400 + address_offset), 9);
 	DWORD old_protect;
 	orig_game_tick = (void (__attribute__((thiscall)) *)(void *)) VirtualAlloc(NULL, sizeof(intended_trampoline), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
@@ -845,16 +860,17 @@ static void hook_game_tick(){
 		0x90, 0x90
 	};
 	memcpy((void *)&intended_patch[1], (void *)&patched_function_location, 4);
-	patch_memory((uint8_t *)0x0089f400, intended_patch, sizeof(intended_patch));
+	patch_memory((uint8_t *)(0x0089f400 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
+// TODO this has s8 offset, but unused at the moment
 static void patch_min_frametime(double min_frametime){
 	LOG("patching minimal frametime to %f", min_frametime);
 	double *min_frametime_const = (double *)0x013d33a0;
 	*min_frametime_const = min_frametime;
 }
 
-static void experinmental_static_patches(){
+static void experinmental_static_patches(uint32_t address_offset){
 	LOG("applying experimental patches");
 }
 
@@ -896,28 +912,50 @@ static void *delayed_init_thread(void *arg){
 		printf("config mutex init failed\n");
 		return 0;
 	}
-	int delay_sec = 10;
+	int delay_sec = 15;
 	LOG("delayed init thread started, delaying for %d seconds\n", delay_sec);
 	sleep(delay_sec);
 
 	// might need to pause all threads here before hooking
 
+	#if !SIMPLIFIED_SLEEP
 	prepare_nt_timer();
+	#endif
 
 	parse_config();
 
+	const char *exe_name = "S4Client.exe";
+	HMODULE s4client_module = GetModuleHandleA(exe_name);
+	if(s4client_module == INVALID_HANDLE_VALUE){
+		LOG("failed fetching module handle of %s, terminating!", exe_name);
+		exit(1);
+	}
+	HANDLE current_process = GetCurrentProcess();
+	MODULEINFO module_info;
+	if(GetModuleInformation(current_process, s4client_module, &module_info, sizeof(module_info)) == 0){
+		LOG("failed getting module info of %s, 0x%08x, terminating!", exe_name, GetLastError());
+		exit(1);
+	}
+	uint32_t game_base_address = (uint32_t)module_info.lpBaseOfDll;
+	CloseHandle(s4client_module);
+	CloseHandle(current_process);
+	LOG("game base address is 0x%08x", game_base_address);
+	uint32_t address_offset = game_base_address - 0x00400000;
+
+	#if SUSPEND_BEFORE_HOOKING
 	// https://learn.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-thread-list
 	DWORD this_thread = GetCurrentThreadId();
-	HANDLE threads_snap = CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0);
+	DWORD this_process = GetCurrentProcessId();
+	HANDLE threads_snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 	THREADENTRY32 te32;
 	if(threads_snap == INVALID_HANDLE_VALUE){
 		LOG("cannot suspend before hooking");
 	}else{
 		LOG("suspending threads before hooking");
-		te32.dwSize = sizeof(THREADENTRY32 );
+		te32.dwSize = sizeof(THREADENTRY32);
 		if(Thread32First(threads_snap, &te32)){
 			do{
-				if(te32.th32ThreadID != this_thread){
+				if(te32.th32OwnerProcessID == this_process && te32.th32ThreadID != this_thread){
 					HANDLE thread_handle = OpenThread(THREAD_SUSPEND_RESUME, 0, te32.th32ThreadID);
 					if(thread_handle != INVALID_HANDLE_VALUE){
 						int ret = SuspendThread(thread_handle);
@@ -936,32 +974,37 @@ static void *delayed_init_thread(void *arg){
 			threads_snap = INVALID_HANDLE_VALUE;
 		}
 	}
+	#endif
 
-	redirect_speed_dampeners();
-	hook_game_tick();
+	fetch_game_context = (struct game_context *(*)(void)) ((uint32_t)fetch_game_context + address_offset);
+	fetch_ctx_01b29540 = (struct ctx_01b29540 *(*)(void)) ((uint32_t)fetch_ctx_01b29540 + address_offset);
+
+	redirect_speed_dampeners(address_offset);
+	hook_game_tick(address_offset);
 	//hook_move_actor_exact();
-	hook_move_actor_by();
+	hook_move_actor_by(address_offset);
 	//hook_switch_weapon_slot();
-	hook_fun_005efcb0();
-	hook_fun_00780b20();
-	hook_calculate_weapon_spread();
-	experinmental_static_patches();
+	hook_fun_005efcb0(address_offset);
+	hook_fun_00780b20(address_offset);
+	hook_calculate_weapon_spread(address_offset);
+	//experinmental_static_patches(address_offset);
 
+	#if SUSPEND_BEFORE_HOOKING
 	if(threads_snap != INVALID_HANDLE_VALUE){
 		LOG("resuming thrads after hooking")
 		if(Thread32First(threads_snap, &te32)){
 			do{
-				if(te32.th32ThreadID != this_thread){
+				if(te32.th32OwnerProcessID == this_process && te32.th32ThreadID != this_thread){
 					HANDLE thread_handle = OpenThread(THREAD_SUSPEND_RESUME, 0, te32.th32ThreadID);
 					if(thread_handle != INVALID_HANDLE_VALUE){
 						int ret = ResumeThread(thread_handle);
 						if(ret == -1){
-							LOG("failed resuming thread with id %u, terminating!\n", te32.th32ThreadID);
+							LOG("failed resuming thread with id %u, terminating!", te32.th32ThreadID);
 							exit(1);
 						}
 						CloseHandle(thread_handle);
 					}else{
-						LOG("failed fetching handle for thread with id %u during resume, terminating!\n", te32.th32ThreadID);
+						LOG("failed fetching handle for thread with id %u during resume, terminating!", te32.th32ThreadID);
 						exit(1);
 					}
 				}
@@ -971,6 +1014,7 @@ static void *delayed_init_thread(void *arg){
 			exit(1);
 		}
 	}
+	#endif
 
 	LOG("now starting main thread");
 	pthread_t thread;
