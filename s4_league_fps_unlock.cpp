@@ -747,7 +747,7 @@ static void redirect_speed_dampeners(int64_t address_offset){
 }
 
 // function at 00871970, not essentially game tick
-// the signature and convention is different in s10 it would seem
+// in s10, the trampoline breaks when themida base reallocation happens, but I don't really know why
 static void (__attribute__((fastcall)) *orig_game_tick)(void *tick_ctx);
 void __attribute__((fastcall)) patched_game_tick(void *tick_ctx){
 	LOG("game tick function hook fired");
@@ -877,6 +877,118 @@ static void hook_game_tick(int64_t address_offset){
 	patch_memory((uint8_t *)(0x0089f400 + address_offset), intended_patch, sizeof(intended_patch));
 }
 
+// function used to wait for a certain amount of time, called by the game_tick function above
+// hooking this as an alternative for s10
+static void (__attribute__((thiscall)) *orig_wait_for)(struct time_context *tctx, double wait_ms);
+static void __attribute__((thiscall)) patched_wait_for(struct time_context *tctx, double wait_ms){
+	LOG("wait_for hook, tctx: 0x%08x", tctx);
+	const static float orig_speed_dampener = 0.015;
+	const static double orig_fixed_frametime = 1.66666666666666678509045596002E1;
+
+	pthread_mutex_lock(&config_mutex);
+	if(config.max_framerate > 0){
+		static struct timespec last_tick = {0};
+		struct timespec this_tick;
+		clock_gettime(CLOCK_MONOTONIC, &this_tick);
+
+		#if LOG_VERBOSE
+		static uint32_t tick_count = 1;
+		#endif
+
+		if(last_tick.tv_sec != 0 || last_tick.tv_nsec != 0){
+			uint32_t diff_ns = this_tick.tv_nsec - last_tick.tv_nsec;
+			while(last_tick.tv_sec == this_tick.tv_sec && diff_ns < target_frametime_ns){
+				if(config.framelimiter_full_busy_loop){
+					// spin it all
+				}else{
+					#if SIMPLIFIED_SLEEP
+					sleep(0);
+					#else
+					uint32_t diff_100ns = diff_ns / 100;
+					if(target_frametime_100ns > diff_100ns + config.framelimiter_busy_loop_buffer_100ns){
+						uint32_t sleep_100ns = target_frametime_100ns - (diff_100ns + config.framelimiter_busy_loop_buffer_100ns);
+						#if LOG_VERBOSE
+						uint32_t sleep_100ns_pre_correct = sleep_100ns;
+						#endif
+						// correct to multiple of min_nt_delay_100ns
+						sleep_100ns = min_nt_delay_100ns * (sleep_100ns / min_nt_delay_100ns);
+						LOG_VERBOSE("need %u pieces of 100ns delay, corrected to %u using %u", sleep_100ns_pre_correct, sleep_100ns, min_nt_delay_100ns);
+						if(sleep_100ns > 0){
+							LOG_VERBOSE("at tick %u time %u using NtDelayExecution to delay %u pieces of 100ns", tick_count, this_tick.tv_nsec, sleep_100ns);
+							LARGE_INTEGER sleep_li;
+							sleep_li.QuadPart = sleep_100ns;
+							sleep_li.QuadPart *= -1;
+							NtDelayExecution(false, &sleep_li);
+						}
+					}
+					#endif
+					// spin the rest
+				}
+				clock_gettime(CLOCK_MONOTONIC, &this_tick);
+				diff_ns = this_tick.tv_nsec - last_tick.tv_nsec;
+				if(last_tick.tv_sec == this_tick.tv_sec && diff_ns < target_frametime_ns){
+					LOG_VERBOSE("spinning, diff_ns %u", diff_ns);
+				}else{
+					LOG_VERBOSE("overshot by %u + %u ns", this_tick.tv_sec - last_tick.tv_sec, diff_ns - target_frametime_ns);
+				}
+			}
+		}
+		last_tick = this_tick;
+		#if LOG_VERBOSE
+		tick_count++;
+		#endif
+	}
+	pthread_mutex_unlock(&config_mutex);
+
+	update_time_delta(tctx);
+	LOG("tctx->delta_t: %f", tctx->delta_t);
+
+	frametime = tctx->delta_t;
+	uint32_t frametime_uint = frametime;
+	frametime_accumulated = frametime_accumulated + frametime_uint;
+
+	float new_speed_dampener = frametime * orig_speed_dampener / orig_fixed_frametime;
+	// some kind of per frame speed filter, filters out smaller movement
+	speed_dampeners[3] = new_speed_dampener;
+	speed_dampeners[4] = new_speed_dampener;
+	// some kind of overall speed dampener
+	speed_dampeners[8] = new_speed_dampener;
+
+	LOG("frametime: %f, speed_dampener: %f", frametime, new_speed_dampener);
+}
+
+static void hook_wait_for(int64_t address_offset){
+	LOG("hooking wait_for");
+
+	uint8_t intended_trampoline[] = {
+		// space for original instruction
+		0, 0, 0, 0, 0, 0, 0, 0, 0,
+		// MOV eax,0x010adb39
+		0xb8, 0, 0, 0, 0,
+		// JMP eax
+		0xff, 0xe0
+	};
+	*(uint32_t *)&intended_trampoline[11] = 0x010adb39 + address_offset;
+	memcpy((void *)intended_trampoline, (void *)(0x010adb30 + address_offset), 9);
+
+	uint8_t intended_patch[] = {
+		// MOV eax, patched_fun_005efcb0
+		0xb8, 0, 0, 0, 0,
+		// JMP eax
+		0xff, 0xe0,
+		// nop nop nop
+		0x90, 0x90, 0x90
+	};
+	*(uint32_t *)&intended_patch[1] = (uint32_t)patched_wait_for;
+
+	orig_wait_for = (void (__attribute__((thiscall)) *)(struct time_context *, double))VirtualAlloc(NULL, sizeof(intended_trampoline), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	memcpy((void *)orig_wait_for, intended_trampoline, sizeof(intended_trampoline));
+	DWORD old_protect;
+	VirtualProtect((void *)orig_wait_for, sizeof(intended_trampoline), PAGE_EXECUTE_READ, &old_protect);
+
+	patch_memory((uint8_t *)(0x010adb30 + address_offset), intended_patch, sizeof(intended_patch));
+}
+
 // TODO this has s8 offset, but unused at the moment
 static void patch_min_frametime(double min_frametime){
 	LOG("patching minimal frametime to %f", min_frametime);
@@ -999,7 +1111,8 @@ static void *delayed_init_thread(void *arg){
 	fetch_ctx_01b29540 = (struct ctx_01b29540 *(*)(void)) ((uint32_t)fetch_ctx_01b29540 + address_offset);
 
 	redirect_speed_dampeners(address_offset);
-	hook_game_tick(address_offset);
+	//hook_game_tick(address_offset);
+	hook_wait_for(address_offset);
 	//hook_move_actor_exact();
 	hook_move_actor_by(address_offset);
 	//hook_switch_weapon_slot();
